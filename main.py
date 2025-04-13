@@ -1,6 +1,6 @@
 """
-Nestlé HR Policy Assistant - Fixed Version
-This application uses the updated OpenAI SDK and fixes the return value issue.
+Nestlé HR Policy Assistant - Final Fixed Version
+With guaranteed text extraction.
 """
 
 import os
@@ -37,25 +37,31 @@ with st.sidebar:
 
     uploaded_file = st.file_uploader("Upload Nestlé HR Policy PDF", type="pdf")
 
-# Function to extract text from PDF
+# Function to extract text from PDF with guaranteed return
 def extract_text_from_pdf(pdf_file):
+    # Default empty text
+    extracted_text = ""
+
     with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
         temp_file_path = temp_file.name
         temp_file.write(pdf_file.getvalue())
 
     try:
-        text = ""
         with open(temp_file_path, 'rb') as file:
             pdf_reader = PdfReader(file)
             for page in pdf_reader.pages:
                 page_text = page.extract_text()
                 if page_text:  # Only add if text was extracted
-                    text += page_text + "\n"
-        return text
+                    extracted_text += page_text + "\n"
+    except Exception as e:
+        st.error(f"Error extracting text: {str(e)}")
     finally:
         # Clean up temporary file
         if os.path.exists(temp_file_path):
             os.remove(temp_file_path)
+
+    # Always return the text (might be empty if extraction failed)
+    return extracted_text
 
 # Function to split text into chunks
 def split_text_into_chunks(text, chunk_size=1000, overlap=200):
@@ -109,19 +115,20 @@ if uploaded_file and openai_api_key:
         if "document_text" not in st.session_state:
             with st.spinner("Processing document..."):
                 # Extract text from PDF
-                text = extract_text_from_pdf(uploaded_file)
+                extracted_text = extract_text_from_pdf(uploaded_file)
 
-                if not text or len(text.strip()) == 0:
+                # Check if we got any text
+                if not extracted_text or len(extracted_text.strip()) == 0:
                     st.error("Could not extract text from the uploaded PDF. Please make sure it's a valid, text-based PDF.")
                 else:
                     # Split text into chunks
-                    chunks = split_text_into_chunks(text)
+                    chunks = split_text_into_chunks(extracted_text)
 
                     # Store in session state
-                    st.session_state.document_text = text
+                    st.session_state.document_text = extracted_text
                     st.session_state.document_chunks = chunks
 
-                    st.success("Document processed successfully! You can now ask questions.")
+                    st.success(f"Document processed successfully! Extracted {len(chunks)} text segments. You can now ask questions.")
 
         # Display chat messages
         for message in st.session_state.messages:
@@ -131,7 +138,7 @@ if uploaded_file and openai_api_key:
         # Get user input
         user_query = st.chat_input("Ask a question about Nestlé's HR policies")
 
-        if user_query and "document_chunks" in st.session_state:
+        if user_query and "document_chunks" in st.session_state and st.session_state.document_chunks:
             # Add user message to chat history
             st.session_state.messages.append({"role": "user", "content": user_query})
 
@@ -146,7 +153,7 @@ if uploaded_file and openai_api_key:
                         # Initialize the OpenAI client
                         client = OpenAI(api_key=openai_api_key)
 
-                        # First, get relevant chunks using keyword extraction
+                        # Get key terms from the question
                         analysis_response = client.chat.completions.create(
                             model="gpt-4o",
                             messages=[
@@ -157,12 +164,14 @@ if uploaded_file and openai_api_key:
                         )
 
                         key_terms = analysis_response.choices[0].message.content
+                        key_terms_list = [term.strip().lower() for term in key_terms.split() if len(term.strip()) > 2]
 
                         # Simple keyword matching to find relevant chunks
                         relevant_text = ""
                         for chunk in st.session_state.document_chunks:
+                            chunk_lower = chunk.lower()
                             # Check if any of the key terms are in the chunk
-                            if any(term.lower() in chunk.lower() for term in key_terms.split()):
+                            if any(term in chunk_lower for term in key_terms_list):
                                 relevant_text += chunk + "\n\n"
 
                         # If we couldn't find relevant chunks, use the first few chunks
